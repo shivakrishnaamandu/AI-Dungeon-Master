@@ -43,7 +43,7 @@ initial_game_state = {
 # --- System Prompt for the AI DM ---
 SYSTEM_PROMPT = f"""You are the Dungeon Master (DM) for a text-based adventure game.
 Your goal is to narrate the game world, respond to player actions, and manage the game state.
-Keep responses concise and engaging, usually 1 paragraph.
+Keep responses concise and engaging, usually 1-3 paragraphs.
 Always incorporate the current game state into your narrative subtly.
 
 RULES FOR PLAYER ACTIONS:
@@ -51,13 +51,27 @@ When the player issues a command, interpret it within the game context.
 Prioritize the following action keywords if they are clearly present in the player's input:
 {', '.join([f"'{kw}'" for kw in ACTION_KEYWORDS])}
 
-If a player uses one of these keywords, structure your response to address that action directly:
-- For recognized actions: Describe the immediate outcome, success or failure, and any changes in the environment or game state.
-- For impossible actions: Clearly state why the action cannot be performed (e.g., "There's no door to the north," "You don't have that item," "The enemy is too far").
+- For **Movement Actions** (like 'go north', 'move east'): The game system will update the player's location. Your role is to **describe the new location** based on the updated 'current_location' in the game state, and how the player arrives there. Do not block movement, just narrate the new scene.
+- For recognized **Non-Movement Actions**: Describe the immediate outcome, success or failure, and any changes in the environment or game state.
+- For impossible actions: Clearly state why the action cannot be performed (e.g., "You don't have that item," "The enemy is too far").
 - If no clear keyword is present: Narrate the scene and respond to the general intent, but still try to move the plot forward.
 
 Always end your turn by prompting the player for their next action.
 """
+
+# Function to handle player movement (NEW)
+def move_player(game_state, direction):
+    # For simplicity, we'll just append the direction to the current location for now.
+    # Later, we can define specific rooms and connections.
+    old_location = game_state["current_location"]
+    new_location = f"{old_location} ({direction} exit)" # AI will describe this
+    game_state["current_location"] = new_location
+
+    if new_location not in game_state["visited_locations"]:
+        game_state["visited_locations"].append(new_location)
+
+    # Return the new location name to be used in AI prompt
+    return new_location
 
 # Function to save game state
 def save_game(state, filename=SAVE_FILE):
@@ -154,10 +168,35 @@ def run_game():
 
             current_game_state["game_time"] += 1
 
+            # --- Handle Player Actions (NEW BLOCK) ---
+            # Default response if no specific action is handled
+            ai_input_message = player_input
+            action_handled = False
+
+            # Simple movement parsing
+            player_input_lower = player_input.lower()
+            movement_directions = ["north", "south", "east", "west", "up", "down"]
+            detected_direction = None
+
+            for direction in movement_directions:
+                if f"go {direction}" in player_input_lower or \
+                f"move {direction}" in player_input_lower or \
+                player_input_lower == direction: # Allows just typing "north"
+                    detected_direction = direction
+                    break
+
+            if detected_direction:
+                new_location_name = move_player(current_game_state, detected_direction)
+                # Formulate the message to the AI after state change
+                ai_input_message = f"I moved {detected_direction}. I am now in '{new_location_name}'. Describe this new location."
+                action_handled = True
+            # --- END NEW BLOCK ---
+
             # Update the system prompt with new game state (always, as game_state might change)
             messages[0]['content'] = SYSTEM_PROMPT + f"\nCurrent Game State: {current_game_state}"
 
-            messages.append({'role': 'user', 'content': player_input})
+            # Use ai_input_message instead of raw player_input for AI's turn
+            messages.append({'role': 'user', 'content': ai_input_message}) # MODIFIED THIS LINE
 
             print(f"\n{Colors.MAGENTA}DM (thinking...){Colors.RESET}\n")
             response = ollama.chat(model=LOCAL_MODEL_NAME, messages=messages)
